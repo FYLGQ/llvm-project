@@ -6180,14 +6180,6 @@ bool Compiler<Emitter>::visitDefaultStmt(const DefaultStmt *S) {
 
 template <class Emitter>
 bool Compiler<Emitter>::visitAttributedStmt(const AttributedStmt *S) {
-  const Stmt *SubStmt = S->getSubStmt();
-
-  bool IsMSVCConstexprAttr = isa<ReturnStmt>(SubStmt) &&
-                             hasSpecificAttr<MSConstexprAttr>(S->getAttrs());
-
-  if (IsMSVCConstexprAttr && !this->emitPushMSVCCE(S))
-    return false;
-
   if (this->Ctx.getLangOpts().CXXAssumptions &&
       !this->Ctx.getLangOpts().MSVCCompat) {
     for (const Attr *A : S->getAttrs()) {
@@ -6195,7 +6187,7 @@ bool Compiler<Emitter>::visitAttributedStmt(const AttributedStmt *S) {
       if (!AA)
         continue;
 
-      assert(isa<NullStmt>(SubStmt));
+      assert(isa<NullStmt>(S->getSubStmt()));
 
       const Expr *Assumption = AA->getAssumption();
       if (Assumption->isValueDependent())
@@ -6214,12 +6206,7 @@ bool Compiler<Emitter>::visitAttributedStmt(const AttributedStmt *S) {
   }
 
   // Ignore other attributes.
-  if (!this->visitStmt(SubStmt))
-    return false;
-
-  if (IsMSVCConstexprAttr)
-    return this->emitPopMSVCCE(S);
-  return true;
+  return this->visitStmt(S->getSubStmt());
 }
 
 template <class Emitter>
@@ -6482,20 +6469,9 @@ bool Compiler<Emitter>::compileConstructor(const CXXConstructorDecl *Ctor) {
       return false;
   }
 
-  if (const Stmt *Body = Ctor->getBody()) {
-    // Only emit the CtorCheck op for non-empty CompoundStmt bodies.
-    // For non-CompoundStmts, always assume they are non-empty and emit it.
-    if (const auto *CS = dyn_cast<CompoundStmt>(Body)) {
-      if (!CS->body_empty() && !this->emitCtorCheck(SourceInfo{}))
-        return false;
-    } else {
-      if (!this->emitCtorCheck(SourceInfo{}))
-        return false;
-    }
-
+  if (const auto *Body = Ctor->getBody())
     if (!visitStmt(Body))
       return false;
-  }
 
   return this->emitRetVoid(SourceInfo{});
 }
@@ -7406,7 +7382,8 @@ bool Compiler<Emitter>::emitComplexComparison(const Expr *LHS, const Expr *RHS,
                                               const BinaryOperator *E) {
   assert(E->isComparisonOp());
   assert(!Initializing);
-  assert(!DiscardResult);
+  if (DiscardResult)
+    return true;
 
   PrimType ElemT;
   bool LHSIsComplex;
